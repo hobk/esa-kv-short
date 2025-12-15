@@ -1,6 +1,3 @@
-// 假设运行环境支持标准的 fetch API 和 Response 对象
-// 如果在 Akamai EdgeWorkers，可能需要引入相应的 helper
-
 export default {
   async fetch(request) {
     try {
@@ -57,6 +54,9 @@ export default {
         // Key=短ID, Value=长链接
         await edgeKV.put(shortId, longUrl);
 
+        // 立即再读一次，确保当前 edge 有值
+        await edgeKV.get(shortId);
+
         const shortLink = `${url.origin}/${shortId}`;
 
         return jsonResponse({ 
@@ -73,7 +73,7 @@ export default {
       if (path === '/' || path === '/index.html') {
         return new Response(htmlPage(), {
           status: 200,
-          headers: { 'Content-Type': 'text/html;charset=UTF-8' }
+          headers: { 'Content-Type': 'text/html;charset=UTF-8','Cache-Control': 'no-store' }
         });
       }
 
@@ -94,7 +94,7 @@ export default {
             status: 302,
             headers: { 
               'Location': existingUrl,
-              'Cache-Control': 'public, max-age=86400' // 可选：添加缓存头以加速后续访问
+            'Cache-Control': 'no-store'
             }
           });
         }
@@ -103,7 +103,7 @@ export default {
       // =========================================================
       // 默认: 404 Not Found
       // =========================================================
-      return new Response(html404(), { status: 404, headers: { 'Content-Type': 'text/html;charset=UTF-8' }});
+      return new Response(html404(), { status: 404, headers: { 'Content-Type': 'text/html;charset=UTF-8' ,'Cache-Control': 'no-store'}});
 
     } catch (error) {
       return jsonResponse({ error: `System Error: ${error.message}` }, 500);
