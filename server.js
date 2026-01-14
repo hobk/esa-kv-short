@@ -145,6 +145,15 @@ function htmlPage() {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Edge CyberLink Shortener</title>
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+  <!--1. 阿里云验证码配置 - 在引入验证码JS脚本之前添加全局配置-->
+  <script>
+    window.AliyunCaptchaConfig = {
+      region: "cn",
+      prefix: "{{IDENTITY}}"
+    };
+  </script>
+  <!--2. 动态引入阿里云验证码JS-->
+  <script type="text/javascript" src="https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js"></script>
   <style>
     :root {
       --neon-blue: #00f3ff;
@@ -313,7 +322,10 @@ function htmlPage() {
         <input type="text" id="customId" placeholder="例如: my-cool-link (4-32位)">
       </div>
 
-      <button id="generateBtn" onclick="shorten()">INITIALIZE SEQUENCE</button>
+      <!--验证码元素容器-->
+      <div id="captcha-element"></div>
+      
+      <button id="generateBtn">INITIALIZE SEQUENCE</button>
 
       <div id="result-area">
         <div class="terminal-output" id="terminalContent"></div>
@@ -322,56 +334,115 @@ function htmlPage() {
     </div>
   </div>
 
-  <script>
-    async function shorten() {
+  <!--3. 验证码初始化脚本-->
+  <script type="text/javascript">
+    var captcha;
+    
+    // 验证前的输入校验
+    function validateInput() {
       const urlInput = document.getElementById('longUrl');
-      const customIdInput = document.getElementById('customId');
-      const resultArea = document.getElementById('result-area');
-      const terminalContent = document.getElementById('terminalContent');
-      const btn = document.getElementById('generateBtn');
-
       const url = urlInput.value;
-      const customId = customIdInput.value;
-
+      
       if (!url) {
         showError(">> ERROR: 长链接不能为空 (URL is required).");
         urlInput.focus();
-        return;
+        return false;
       }
-
-      // UI Loading State
-      btn.disabled = true;
-      btn.innerHTML = '<div class="loader"></div> PROCESSING...';
-      resultArea.style.display = 'none';
-
-      // 构建请求 URL
-      let fetchUrl = '/create?url=' + encodeURIComponent(url);
-      if (customId) {
-        fetchUrl += '&id=' + encodeURIComponent(customId);
-      }
-
-      try {
-        const res = await fetch(fetchUrl);
-        const data = await res.json();
-
-        if (!res.ok) {
-          // 处理后端返回的错误 (例如 400 格式错误, 409 ID冲突)
-          showError(">> ERROR [" + res.status + "]: " + (data.error || 'Unknown Error'));
-        } else {
-          // 成功
-          showSuccess(data.shortLink, data.type === 'custom');
-          // 清空输入框
-          urlInput.value = '';
-          customIdInput.value = '';
-        }
-      } catch (e) {
-        showError(">> NETWORK ERROR: 连接失败，请检查网络.");
-      } finally {
-        // Reset Button State
-        btn.disabled = false;
-        btn.innerText = 'INITIALIZE SEQUENCE';
-      }
+      return true;
     }
+    
+    // 初始化阿里云验证码
+    window.initAliyunCaptcha({
+      SceneId: "{{SCENE_ID}}",  // 场景ID，需要替换为实际的场景ID
+      mode: "popup",  // 验证码模式：popup弹出式
+      element: "#captcha-element",  // 验证码元素容器
+      button: "#generateBtn",  // 触发验证码弹窗的按钮
+      // 验证码验证通过回调函数
+      success: function (captchaVerifyParam) {
+        // 先进行输入校验
+        if (!validateInput()) {
+          if (captcha) captcha.refresh();
+          return;
+        }
+        
+        // 获取输入值
+        const urlInput = document.getElementById('longUrl');
+        const customIdInput = document.getElementById('customId');
+        const resultArea = document.getElementById('result-area');
+        const btn = document.getElementById('generateBtn');
+        
+        const url = urlInput.value;
+        const customId = customIdInput.value;
+        
+        // UI Loading State
+        btn.disabled = true;
+        btn.innerHTML = '<div class="loader"></div> PROCESSING...';
+        resultArea.style.display = 'none';
+        
+        // 构建请求 URL
+        let fetchUrl = '/create?url=' + encodeURIComponent(url);
+        if (customId) {
+          fetchUrl += '&id=' + encodeURIComponent(customId);
+        }
+        
+        // 发起请求，携带验签参数在header中
+        fetch(fetchUrl, {
+          method: 'GET',
+          headers: { 
+            'captcha-verify-param': captchaVerifyParam
+          },
+          credentials: 'include'
+        })
+        .then(async function(res) {
+          const verifyCode = res.headers.get('X-Captcha-Verify-Code');
+          const data = await res.json();
+          
+          // 检查验证码验证结果
+          if (verifyCode && verifyCode !== 'T001') {
+            showError(">> CAPTCHA ERROR [" + verifyCode + "]: 验证码验证失败，请重试");
+            if (captcha) captcha.refresh();
+            return;
+          }
+          
+          if (!res.ok) {
+            // 处理后端返回的错误 (例如 400 格式错误, 409 ID冲突)
+            showError(">> ERROR [" + res.status + "]: " + (data.error || 'Unknown Error'));
+          } else {
+            // 成功
+            showSuccess(data.shortLink, data.type === 'custom');
+            // 清空输入框
+            urlInput.value = '';
+            customIdInput.value = '';
+          }
+          if (captcha) captcha.refresh();
+        })
+        .catch(function(e) {
+          showError(">> NETWORK ERROR: 连接失败，请检查网络.");
+          if (captcha) captcha.refresh();
+        })
+        .finally(function() {
+          // Reset Button State
+          btn.disabled = false;
+          btn.innerText = 'INITIALIZE SEQUENCE';
+        });
+      },
+      // 验证码验证不通过回调函数
+      fail: function (result) {
+        console.error('Captcha verification failed:', result);
+        showError(">> CAPTCHA ERROR: 验证失败，请重试");
+      },
+      // 绑定验证码实例回调函数
+      getInstance: function (instance) {
+        captcha = instance;
+      },
+      // 指定ESA的服务域名
+      server: ['captcha-esa-open.aliyuncs.com', 'captcha-esa-open-b.aliyuncs.com'],
+      // 滑块验证和一点即过的验证形态触发框体样式
+      slideStyle: {
+        width: 360,
+        height: 40
+      }
+    });
 
     function showError(msg) {
       const resultArea = document.getElementById('result-area');
